@@ -30,7 +30,7 @@ jobs:
       - run:
           name: Build project
           command: pnpm build
-      # Guardamos el bundle para el job de deploy
+      # Guardamos el bundle generado en el workspace para pasarlo al siguiente job
       - persist_to_workspace:
           root: .
           paths:
@@ -39,15 +39,28 @@ jobs:
   deploy:
     executor: node/default
     steps:
-      # Descargamos los archivos que el job 'build' generó
+      # Descargamos los archivos que el job 'build' generó (carpeta dist/)
       - attach_workspace:
           at: .
       # Configuramos credenciales de AWS (requiere variables de entorno en CircleCI)
       - aws-cli/setup
-      # Empaquetamos lambda.js 
+      # Instalamos utilidades necesarias en el contenedor
+      - run:
+          name: Instalar utilidades (zip)
+          command: sudo apt-get update && sudo apt-get install -y zip
+          
+      # Evitamos problemas de symlinks con pnpm instalando 'pg' de forma limpia con npm
+      - run:
+          name: Instalar driver de base de datos (Postgres) plano
+          command: |
+            rm -rf node_modules
+            npm install pg --no-save
+            
+      # Comprimimos recursivamente manteniendo las rutas dist/lambda.js y node_modules/pg
       - run:
           name: Crear paquete ZIP
-          command: zip -j lambda-payload.zip dist/lambda.js
+          command: zip -r lambda-payload.zip dist/lambda.js node_modules
+          
       # Enviamos el ZIP a AWS Lambda
       - run:
           name: Desplegar código a AWS Lambda
@@ -55,6 +68,28 @@ jobs:
             aws lambda update-function-code \
               --function-name $LAMBDA_NAME \
               --zip-file fileb://lambda-payload.zip
+              
+      # Esperamos que AWS termine de procesar el ZIP antes de cambiar la configuración
+      - run:
+          name: Esperar que el código se procese en AWS
+          command: |
+            aws lambda wait function-updated \
+              --function-name $LAMBDA_NAME
+
+      # Configuramos el Handler apuntando a la carpeta dist/
+      - run:
+          name: Configurar el Handler de Lambda
+          command: |
+            aws lambda update-function-configuration \
+              --function-name $LAMBDA_NAME \
+              --handler dist/lambda.handler
+
+      # (Opcional) Esperamos que AWS aplique el Handler para asegurar que la Lambda quede 100% lista
+      - run:
+          name: Confirmar actualización final de la Lambda
+          command: |
+            aws lambda wait function-updated \
+              --function-name $LAMBDA_NAME
 
 workflows:
   build-and-test:
@@ -68,5 +103,6 @@ workflows:
             - build
           filters:
             branches:
+              # El despliegue automático se activará únicamente al hacer cambios en 'develop'
               only:
                 - develop

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jest tests" tests="3" failures="0" errors="0" time="10.443">
+  <testsuite name="CustomersService" errors="0" failures="0" skipped="0" timestamp="2026-07-16T01:37:50" time="7.375" tests="1">
+    <testcase classname="CustomersService registers an active customer by default" name="CustomersService registers an active customer by default" time="0.013">
+    </testcase>
+  </testsuite>
+  <testsuite name="ProductsService" errors="0" failures="0" skipped="0" timestamp="2026-07-16T01:37:58" time="0.514" tests="1">
+    <testcase classname="ProductsService registers an active product by default" name="ProductsService registers an active product by default" time="0.003">
+    </testcase>
+  </testsuite>
+  <testsuite name="AppController" errors="0" failures="0" skipped="0" timestamp="2026-07-16T01:37:58" time="0.332" tests="1">
+    <testcase classname="AppController root should return &quot;Hello World!&quot;" name="AppController root should return &quot;Hello World!&quot;" time="0.006">
+    </testcase>
+  </testsuite>
+</testsuites>

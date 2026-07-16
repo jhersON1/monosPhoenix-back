@@ -53,11 +53,11 @@ jobs:
           command: |
             sudo apt-get update && sudo apt-get install -y zip
             sudo npm install -g pnpm
-      # Instalamos SOLO las dependencias de producción para aligerar la Lambda
+      # Instalamos solo dependencias de producción (pg, typeorm y sub-deps)
       - run:
           name: Instalar dependencias de producción
-          command: pnpm install --prod
-      # Comprimimos la carpeta dist y los node_modules en un zip
+          command: pnpm install --prod --frozen-lockfile
+      # Comprimimos dist (bundle webpack) + node_modules (solo externals)
       - run:
           name: Crear paquete ZIP
           command: zip -r lambda-payload.zip dist node_modules

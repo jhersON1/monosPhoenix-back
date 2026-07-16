@@ -1,62 +1,91 @@
-# This config was automatically generated from your source code
-# Stacks detected: deps:node:.,test:jest:
+# Configuración de CircleCI para Backend
+# Stack: Node.js + NestJS + TypeORM + pnpm
 version: 2.1
+
 orbs:
   node: circleci/node@5
+  aws-cli: circleci/aws-cli@4.1
+
 jobs:
-  test-node:
-    # Install node dependencies and run tests
+  test:
     executor: node/default
     environment:
       JEST_JUNIT_OUTPUT_DIR: ./test-results/
     steps:
       - checkout
       - node/install-packages:
-          cache-path: ~/project/node_modules
-          override-ci-command: npm install
-      - run:
-          command: npm install jest-junit
+          pkg-manager: pnpm
       - run:
           name: Run tests
-          command: npm run test --ci --runInBand --reporters=default --reporters=jest-junit
+          command: pnpm test -- --ci --runInBand --reporters=default --reporters=jest-junit
       - store_test_results:
           path: ./test-results/
-  build-node:
-    # Build node project
+
+  build:
     executor: node/default
     steps:
       - checkout
       - node/install-packages:
-          cache-path: ~/project/node_modules
-          override-ci-command: npm install
+          pkg-manager: pnpm
       - run:
-          command: npm run build
-      - run:
-          name: Create the ~/artifacts directory if it doesn't exist
-          command: mkdir -p ~/artifacts
-      # Copy output to artifacts dir
-      - run:
-          name: Copy artifacts
-          command: cp -R build dist public .output .next .docusaurus ~/artifacts 2>/dev/null || true
-      - store_artifacts:
-          path: ~/artifacts
-          destination: node-build
+          name: Build project
+          command: pnpm build
+      # Guardamos los archivos necesarios para pasarlos al job de deploy
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+            - package.json
+            - pnpm-lock.yaml
+
   deploy:
-    # This is an example deploy job, not actually used by the workflow
-    docker:
-      - image: cimg/base:stable
+    executor: node/default
     steps:
-      # Replace this with steps to deploy to users
+      # Descargamos los archivos que el job 'build' generó
+      - attach_workspace:
+          at: .
+      # Configuramos credenciales de AWS (requiere variables de entorno en CircleCI)
+      - aws-cli/setup
+      # Instalamos utilidades necesarias
       - run:
-          name: deploy
-          command: '#e.g. ./deploy.sh'
+          name: Instalar utilidades (zip y pnpm)
+          command: |
+            sudo apt-get update && sudo apt-get install -y zip
+            sudo npm install -g pnpm
+      # Instalamos SOLO las dependencias de producción para aligerar la Lambda
+      - run:
+          name: Instalar dependencias de producción
+          command: pnpm install --prod
+      # Comprimimos la carpeta dist y los node_modules en un zip
+      - run:
+          name: Crear paquete ZIP
+          command: zip -r lambda-payload.zip dist node_modules
+      # Enviamos el ZIP a AWS Lambda usando la variable de entorno
+      - run:
+          name: Desplegar código a AWS Lambda
+          command: |
+            aws lambda update-function-code \
+              --function-name $LAMBDA_NAME \
+              --zip-file fileb://lambda-payload.zip
+      # Aseguramos que AWS apunte al archivo lambda.js usando la variable de entorno
+      - run:
+          name: Configurar el Handler de Lambda
+          command: |
+            aws lambda update-function-configuration \
+              --function-name $LAMBDA_NAME \
+              --handler dist/lambda.handler
+
 workflows:
   build-and-test:
     jobs:
-      - test-node
-      - build-node:
+      - test
+      - build:
           requires:
-            - test-node
-    # - deploy:
-    #     requires:
-    #       - build-node
+            - test
+      - deploy:
+          requires:
+            - build
+          filters:
+            # Ahora el despliegue automático se activará solo al hacer cambios en 'develop'
+            branches:
+              only: develop

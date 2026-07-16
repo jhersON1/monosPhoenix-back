@@ -9,14 +9,13 @@ module.exports = function (options) {
 
   return {
     ...options,
-    externals: [], // Asegura que todo vaya al bundle
+    externals: ['pg'], 
     output: {
       ...options.output,
       libraryTarget: 'commonjs2',
     },
     plugins: [
       ...options.plugins,
-      // 1. Ignora módulos opcionales de NestJS
       new webpack.IgnorePlugin({
         checkResource(resource) {
           if (lazyImports.includes(resource)) {
@@ -28,10 +27,6 @@ module.exports = function (options) {
           }
           return false;
         },
-      }),
-      // 2. NUEVO: Ignora pg-native para que el driver de Postgres no falle al compilar
-      new webpack.IgnorePlugin({
-        resourceRegExp: /^pg-native$/,
       }),
     ],
     optimization: {

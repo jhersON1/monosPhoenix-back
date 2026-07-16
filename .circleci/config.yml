@@ -30,14 +30,11 @@ jobs:
       - run:
           name: Build project
           command: pnpm build
-      # Guardamos los archivos necesarios para pasarlos al job de deploy
+      # Guardamos el bundle para el job de deploy
       - persist_to_workspace:
           root: .
           paths:
             - dist
-            - package.json
-            - pnpm-lock.yaml
-            - pnpm-workspace.yaml
 
   deploy:
     executor: node/default
@@ -47,34 +44,24 @@ jobs:
           at: .
       # Configuramos credenciales de AWS (requiere variables de entorno en CircleCI)
       - aws-cli/setup
-      # Instalamos utilidades necesarias
-      - run:
-          name: Instalar utilidades (zip y pnpm)
-          command: |
-            sudo apt-get update && sudo apt-get install -y zip
-            sudo npm install -g pnpm
-      # Instalamos solo dependencias de producción (pg, typeorm y sub-deps)
-      - run:
-          name: Instalar dependencias de producción
-          command: pnpm install --prod --frozen-lockfile
-      # Comprimimos dist (bundle webpack) + node_modules (solo externals)
+      # Empaquetamos lambda.js (webpack ya bundleó todo, incluido pg y typeorm)
       - run:
           name: Crear paquete ZIP
-          command: zip -r lambda-payload.zip dist
-      # Enviamos el ZIP a AWS Lambda usando la variable de entorno
+          command: zip -j lambda-payload.zip dist/lambda.js
+      # Enviamos el ZIP a AWS Lambda
       - run:
           name: Desplegar código a AWS Lambda
           command: |
             aws lambda update-function-code \
               --function-name $LAMBDA_NAME \
               --zip-file fileb://lambda-payload.zip
-      # Aseguramos que AWS apunte al archivo lambda.js usando la variable de entorno
+      # Handler apunta directo a lambda.js (sin dist/)
       - run:
-          name: Configurar el Handler de Lambda
+          name: Configurar Handler de Lambda
           command: |
             aws lambda update-function-configuration \
               --function-name $LAMBDA_NAME \
-              --handler dist/lambda.handler
+              --handler lambda.handler
 
 workflows:
   build-and-test:
@@ -87,6 +74,6 @@ workflows:
           requires:
             - build
           filters:
-            # Ahora el despliegue automático se activará solo al hacer cambios en 'develop'
             branches:
-              only: develop
+              only:
+                - develop

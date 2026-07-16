@@ -36,60 +36,31 @@ jobs:
           paths:
             - dist
 
-  deploy:
-    executor: node/default
-    steps:
-      # Descargamos los archivos que el job 'build' generó (carpeta dist/)
-      - attach_workspace:
-          at: .
-      # Configuramos credenciales de AWS (requiere variables de entorno en CircleCI)
-      - aws-cli/setup
-      # Instalamos utilidades necesarias en el contenedor
+# 1. Instalamos TODAS las dependencias de producción de forma plana
       - run:
-          name: Instalar utilidades (zip)
-          command: sudo apt-get update && sudo apt-get install -y zip
-          
-      # Evitamos problemas de symlinks con pnpm instalando 'pg' de forma limpia con npm
-      - run:
-          name: Instalar driver de base de datos (Postgres) plano
+          name: Instalar dependencias de producción (npm plano)
           command: |
             rm -rf node_modules
-            npm install pg --no-save
+            # Esto instala Nest, TypeORM, pg, etc., ignorando lo de desarrollo (devDependencies)
+            npm install --omit=dev
             
-      # Comprimimos recursivamente manteniendo las rutas dist/lambda.js y node_modules/pg
+            # Limpieza de archivos basura para garantizar que el ZIP pese poco
+            find node_modules -type f -name "*.md" -delete
+            find node_modules -type f -name "*.map" -delete
+            find node_modules -type f -name "*.ts" -delete
+            
+      # 2. Comprimimos lambda.js Y la carpeta node_modules completa
       - run:
           name: Crear paquete ZIP
           command: zip -r lambda-payload.zip dist/lambda.js node_modules
           
-      # Enviamos el ZIP a AWS Lambda
+      # 3. Enviamos a AWS (los siguientes comandos quedan igual)
       - run:
           name: Desplegar código a AWS Lambda
           command: |
             aws lambda update-function-code \
               --function-name $LAMBDA_NAME \
               --zip-file fileb://lambda-payload.zip
-              
-      # Esperamos que AWS termine de procesar el ZIP antes de cambiar la configuración
-      - run:
-          name: Esperar que el código se procese en AWS
-          command: |
-            aws lambda wait function-updated \
-              --function-name $LAMBDA_NAME
-
-      # Configuramos el Handler apuntando a la carpeta dist/
-      - run:
-          name: Configurar el Handler de Lambda
-          command: |
-            aws lambda update-function-configuration \
-              --function-name $LAMBDA_NAME \
-              --handler dist/lambda.handler
-
-      # (Opcional) Esperamos que AWS aplique el Handler para asegurar que la Lambda quede 100% lista
-      - run:
-          name: Confirmar actualización final de la Lambda
-          command: |
-            aws lambda wait function-updated \
-              --function-name $LAMBDA_NAME
 
 workflows:
   build-and-test:

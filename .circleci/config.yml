@@ -35,6 +35,8 @@ jobs:
           root: .
           paths:
             - dist
+            - package.json
+            - pnpm-lock.yaml
 
   deploy:
     executor: node/default

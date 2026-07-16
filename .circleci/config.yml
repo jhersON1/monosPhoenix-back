@@ -44,7 +44,7 @@ jobs:
           at: .
       # Configuramos credenciales de AWS (requiere variables de entorno en CircleCI)
       - aws-cli/setup
-      # Empaquetamos lambda.js (webpack ya bundleó todo, incluido pg y typeorm)
+      # Empaquetamos lambda.js 
       - run:
           name: Crear paquete ZIP
           command: zip -j lambda-payload.zip dist/lambda.js

@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { Handler, Context } from 'aws-lambda';
+import 'pg';
 
 let cachedServer: Handler;
 

@@ -60,7 +60,7 @@ jobs:
       # Comprimimos dist (bundle webpack) + node_modules (solo externals)
       - run:
           name: Crear paquete ZIP
-          command: zip -r lambda-payload.zip dist node_modules
+          command: zip -r lambda-payload.zip dist
       # Enviamos el ZIP a AWS Lambda usando la variable de entorno
       - run:
           name: Desplegar código a AWS Lambda

@@ -55,13 +55,6 @@ jobs:
             aws lambda update-function-code \
               --function-name $LAMBDA_NAME \
               --zip-file fileb://lambda-payload.zip
-      # Handler apunta directo a lambda.js (sin dist/)
-      - run:
-          name: Configurar Handler de Lambda
-          command: |
-            aws lambda update-function-configuration \
-              --function-name $LAMBDA_NAME \
-              --handler lambda.handler
 
 workflows:
   build-and-test:

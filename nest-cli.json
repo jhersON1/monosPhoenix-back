@@ -4,6 +4,7 @@
   "sourceRoot": "src",
   "entryFile": "lambda",
   "compilerOptions": {
-    "webpack": true
+    "webpack": true,
+    "plugins": ["@nestjs/swagger"]
   }
 }

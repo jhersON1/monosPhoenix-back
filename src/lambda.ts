@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { Handler, Context } from 'aws-lambda';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 let cachedServer: Handler;
 
@@ -20,6 +21,15 @@ async function bootstrap() {
 
     // 2. Habilitamos CORS
     nestApp.enableCors();
+
+    // Configuramos Swagger
+    const config = new DocumentBuilder()
+      .setTitle('Monos Phoenix API')
+      .setDescription('The API documentation for Monos Phoenix backend')
+      .setVersion('1.0')
+      .build();
+    const documentFactory = () => SwaggerModule.createDocument(nestApp, config);
+    SwaggerModule.setup('api/docs', nestApp, documentFactory);
 
     // 3. Inicializamos la aplicación de NestJS (sin usar .listen)
     await nestApp.init();

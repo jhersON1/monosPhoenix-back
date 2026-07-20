@@ -111,18 +111,24 @@ jobs:
               --repository-name "${ECR_REPOSITORY}" \
               --image-id "imageDigest=${IMAGE_DIGEST}"
 
-            read -r CRITICAL HIGH MEDIUM LOW INFORMATIONAL UNDEFINED <<< "$(aws ecr describe-image-scan-findings \
+            SCAN_COUNTS_RAW="$(aws ecr describe-image-scan-findings \
               --repository-name "${ECR_REPOSITORY}" \
               --image-id "imageDigest=${IMAGE_DIGEST}" \
               --query '[imageScanFindings.findingSeverityCounts.CRITICAL, imageScanFindings.findingSeverityCounts.HIGH, imageScanFindings.findingSeverityCounts.MEDIUM, imageScanFindings.findingSeverityCounts.LOW, imageScanFindings.findingSeverityCounts.INFORMATIONAL, imageScanFindings.findingSeverityCounts.UNDEFINED]' \
               --output text)"
 
-            CRITICAL="${CRITICAL/None/0}"
-            HIGH="${HIGH/None/0}"
-            MEDIUM="${MEDIUM/None/0}"
-            LOW="${LOW/None/0}"
-            INFORMATIONAL="${INFORMATIONAL/None/0}"
-            UNDEFINED="${UNDEFINED/None/0}"
+            SCAN_COUNTS=(${SCAN_COUNTS_RAW})
+            if [ "${#SCAN_COUNTS[@]}" -ne 6 ]; then
+              echo "Unexpected ECR severity response: ${SCAN_COUNTS_RAW}"
+              exit 1
+            fi
+
+            CRITICAL="${SCAN_COUNTS[0]/None/0}"
+            HIGH="${SCAN_COUNTS[1]/None/0}"
+            MEDIUM="${SCAN_COUNTS[2]/None/0}"
+            LOW="${SCAN_COUNTS[3]/None/0}"
+            INFORMATIONAL="${SCAN_COUNTS[4]/None/0}"
+            UNDEFINED="${SCAN_COUNTS[5]/None/0}"
 
             echo "ECR scan findings: CRITICAL=${CRITICAL}, HIGH=${HIGH}, MEDIUM=${MEDIUM}, LOW=${LOW}, INFORMATIONAL=${INFORMATIONAL}, UNDEFINED=${UNDEFINED}"
 

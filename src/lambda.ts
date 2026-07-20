@@ -2,12 +2,23 @@ import { configure as serverlessExpress } from '@codegenie/serverless-express';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
-import { Handler, Context } from 'aws-lambda';
+import type { RequestListener } from 'node:http';
+import type {
+  APIGatewayProxyEvent,
+  APIGatewayProxyEventV2,
+  APIGatewayProxyResult,
+  APIGatewayProxyResultV2,
+  Handler,
+} from 'aws-lambda';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
-let cachedServer: Handler;
+type ApiGatewayEvent = APIGatewayProxyEvent | APIGatewayProxyEventV2;
+type ApiGatewayResult = APIGatewayProxyResult | APIGatewayProxyResultV2;
+type ApiGatewayHandler = Handler<ApiGatewayEvent, ApiGatewayResult>;
 
-async function bootstrap() {
+let cachedServer: ApiGatewayHandler | undefined;
+
+async function bootstrap(): Promise<ApiGatewayHandler> {
   if (!cachedServer) {
     const nestApp = await NestFactory.create(AppModule);
 
@@ -35,14 +46,20 @@ async function bootstrap() {
     await nestApp.init();
 
     // 4. Obtenemos la instancia subyacente de Express y la envolvemos
-    const expressApp = nestApp.getHttpAdapter().getInstance();
-    cachedServer = serverlessExpress({ app: expressApp });
+    const expressApp = nestApp.getHttpAdapter().getInstance() as RequestListener;
+    cachedServer = serverlessExpress<ApiGatewayEvent, ApiGatewayResult>({ app: expressApp });
   }
-  
+
   return cachedServer;
 }
 
-export const handler: Handler = async (event: any, context: Context) => {
+export const handler: ApiGatewayHandler = async (event, context) => {
   const server = await bootstrap();
-   return (server as (event: any, context: Context) => Promise<any>)(event, context);
+  const result = await server(event, context, () => undefined);
+
+  if (result === undefined) {
+    throw new Error('Serverless Express returned no response.');
+  }
+
+  return result;
 };

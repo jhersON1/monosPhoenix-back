@@ -116,11 +116,12 @@ arquitectura `x86_64` usada por defecto en Lambda.
 ### 1. Construir la imagen
 
 ```bash
-docker build --platform linux/amd64 --tag monos-phoenix-back:local .
+docker build --platform linux/amd64 --provenance=false --tag monos-phoenix-back:local .
 ```
 
 La construcción instala las dependencias con la versión de pnpm declarada en `package.json`,
-compila `dist/lambda.js` y conserva únicamente las dependencias de producción.
+compila `dist/lambda.js` y conserva únicamente las dependencias de producción. La opción
+`--provenance=false` genera un manifiesto de una sola arquitectura compatible con AWS Lambda.
 
 ### 2. Ejecutar el contenedor
 

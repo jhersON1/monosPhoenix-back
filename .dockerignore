@@ -12,6 +12,7 @@ dist
 coverage
 test
 events
+docs
 **/*.spec.ts
 
 *.log

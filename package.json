@@ -6,7 +6,9 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build --webpack",
+    "build": "pnpm run build:lambda",
+    "build:http": "nest build --config nest-cli.json",
+    "build:lambda": "nest build --config nest-cli.lambda.json",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start --entryFile main",
     "start:dev": "nest start --entryFile main --watch",

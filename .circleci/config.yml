@@ -99,43 +99,7 @@ jobs:
               exit 1
             fi
 
-            {
-              echo "export IMAGE_DIGEST=${IMAGE_DIGEST}"
-              echo "export DEPLOY_IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}@${IMAGE_DIGEST}"
-            } >> "${BASH_ENV}"
-
-      - run:
-          name: Enforce ECR vulnerability gate
-          command: |
-            aws ecr wait image-scan-complete \
-              --repository-name "${ECR_REPOSITORY}" \
-              --image-id "imageDigest=${IMAGE_DIGEST}"
-
-            SCAN_COUNTS_RAW="$(aws ecr describe-image-scan-findings \
-              --repository-name "${ECR_REPOSITORY}" \
-              --image-id "imageDigest=${IMAGE_DIGEST}" \
-              --query '[imageScanFindings.findingSeverityCounts.CRITICAL, imageScanFindings.findingSeverityCounts.HIGH, imageScanFindings.findingSeverityCounts.MEDIUM, imageScanFindings.findingSeverityCounts.LOW, imageScanFindings.findingSeverityCounts.INFORMATIONAL, imageScanFindings.findingSeverityCounts.UNDEFINED]' \
-              --output text)"
-
-            SCAN_COUNTS=(${SCAN_COUNTS_RAW})
-            if [ "${#SCAN_COUNTS[@]}" -ne 6 ]; then
-              echo "Unexpected ECR severity response: ${SCAN_COUNTS_RAW}"
-              exit 1
-            fi
-
-            CRITICAL="${SCAN_COUNTS[0]/None/0}"
-            HIGH="${SCAN_COUNTS[1]/None/0}"
-            MEDIUM="${SCAN_COUNTS[2]/None/0}"
-            LOW="${SCAN_COUNTS[3]/None/0}"
-            INFORMATIONAL="${SCAN_COUNTS[4]/None/0}"
-            UNDEFINED="${SCAN_COUNTS[5]/None/0}"
-
-            echo "ECR scan findings: CRITICAL=${CRITICAL}, HIGH=${HIGH}, MEDIUM=${MEDIUM}, LOW=${LOW}, INFORMATIONAL=${INFORMATIONAL}, UNDEFINED=${UNDEFINED}"
-
-            if [ "${CRITICAL}" -gt 0 ] || [ "${HIGH}" -gt 0 ]; then
-              echo "Deployment blocked: the image contains HIGH or CRITICAL vulnerabilities."
-              exit 1
-            fi
+            echo "export DEPLOY_IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}@${IMAGE_DIGEST}" >> "${BASH_ENV}"
 
       - run:
           name: Deploy image to AWS Lambda

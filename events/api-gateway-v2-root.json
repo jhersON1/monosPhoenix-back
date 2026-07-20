@@ -1,0 +1,29 @@
+{
+  "version": "2.0",
+  "routeKey": "GET /",
+  "rawPath": "/",
+  "rawQueryString": "",
+  "headers": {
+    "host": "localhost",
+    "x-forwarded-proto": "http"
+  },
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "local",
+    "domainName": "localhost",
+    "domainPrefix": "local",
+    "http": {
+      "method": "GET",
+      "path": "/",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "local-docker-invocation"
+    },
+    "requestId": "local-request",
+    "routeKey": "GET /",
+    "stage": "$default",
+    "time": "20/Jul/2026:00:00:00 +0000",
+    "timeEpoch": 1784505600000
+  },
+  "isBase64Encoded": false
+}

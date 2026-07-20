@@ -108,6 +108,61 @@ pnpm build
 pnpm start:prod
 ```
 
+## Ejecución local con Docker y AWS Lambda
+
+La imagen utiliza el runtime oficial de AWS Lambda para Node.js 24 y se construye para la
+arquitectura `x86_64` usada por defecto en Lambda.
+
+### 1. Construir la imagen
+
+```bash
+docker build --platform linux/amd64 --tag monos-phoenix-back:local .
+```
+
+La construcción instala las dependencias con la versión de pnpm declarada en `package.json`,
+compila `dist/lambda.js` y conserva únicamente las dependencias de producción.
+
+### 2. Ejecutar el contenedor
+
+```bash
+docker run --rm --name monos-phoenix-back-lambda --platform linux/amd64 --publish 9000:8080 --env-file .env monos-phoenix-back:local
+```
+
+Las credenciales de PostgreSQL se entregan durante la ejecución mediante `.env`; este archivo no
+se copia dentro de la imagen. Si PostgreSQL se ejecuta directamente en Docker Desktop, utiliza
+`DB_HOST=host.docker.internal` en la configuración local.
+
+### 3. Invocar el handler
+
+Desde PowerShell, en otra terminal:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri 'http://localhost:9000/2015-03-31/functions/function/invocations' `
+  -ContentType 'application/json' `
+  -InFile './events/api-gateway-v2-root.json'
+```
+
+Desde Bash:
+
+```bash
+curl --request POST \
+  'http://localhost:9000/2015-03-31/functions/function/invocations' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@events/api-gateway-v2-root.json'
+```
+
+La respuesta esperada contiene `statusCode: 200` y `body: "Hello World!"`. La primera invocación
+inicializa NestJS y necesita acceso válido a PostgreSQL.
+
+### 4. Consultar logs y detener el contenedor
+
+```bash
+docker logs monos-phoenix-back-lambda
+docker stop monos-phoenix-back-lambda
+```
+
 ## Pruebas y calidad de código
 
 ### Ejecutar pruebas unitarias

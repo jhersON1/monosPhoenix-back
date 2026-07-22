@@ -46,6 +46,7 @@ jobs:
             LOCAL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 
             docker build \
+              --pull \
               --platform linux/amd64 \
               --provenance=false \
               --tag "${LOCAL_IMAGE}" \
@@ -152,6 +153,13 @@ jobs:
               echo "Enable scan-on-push for the ECR repository."
               exit 1
             fi
+
+            echo "ECR HIGH/CRITICAL findings:"
+            aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id "imageTag=${IMAGE_TAG}" \
+              --query 'imageScanFindings.findings[?severity==`HIGH` || severity==`CRITICAL`].[severity,packageVulnerabilityDetails.vulnerabilityId,packageVulnerabilityDetails.vulnerablePackages[0].name,packageVulnerabilityDetails.vulnerablePackages[0].version,uri]' \
+              --output table
 
             critical="$(aws ecr describe-image-scan-findings \
               --repository-name "${ECR_REPOSITORY}" \

@@ -217,7 +217,7 @@ jobs:
                     blocking_findings=$((blocking_findings + 1))
                     ;;
                 esac
-              done <<< "${findings}"
+              done < <(printf '%s\n' "${findings}")
             fi
 
             expected_findings=$((critical + high))

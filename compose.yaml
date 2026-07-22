@@ -1,0 +1,53 @@
+name: monos-phoenix-local
+
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: monos_phoenix
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d monos_phoenix"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      NODE_ENV: development
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_NAME: monos_phoenix
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_SSL: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    init: true
+
+volumes:
+  postgres_data:

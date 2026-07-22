@@ -108,6 +108,39 @@ pnpm build
 pnpm start:prod
 ```
 
+## Desarrollo local con Docker Compose
+
+El entorno de desarrollo utiliza `Dockerfile.dev` y levanta dos servicios:
+
+- `api`: NestJS en modo watch, disponible en `http://localhost:3000`.
+- `database`: PostgreSQL 17 con almacenamiento persistente en un volumen de Docker.
+
+No es necesario instalar PostgreSQL ni pnpm en el equipo. Para construir e iniciar todo:
+
+```bash
+docker compose up --build
+```
+
+Cuando PostgreSQL esté saludable, NestJS iniciará y mostrará un mensaje similar a:
+
+```text
+Nest application successfully started
+```
+
+Comprueba la API en `http://localhost:3000`. Los cambios realizados dentro de `src/` se reflejan
+mediante hot reload. Para detener los servicios presiona `Ctrl+C` o ejecuta:
+
+```bash
+docker compose down
+```
+
+El volumen `monos-phoenix-local_postgres_data` conserva la base de datos entre ejecuciones. Para
+reiniciarla desde cero se puede usar `docker compose down --volumes`.
+
+`Dockerfile.dev` contiene dependencias de desarrollo y ejecuta el servidor HTTP de NestJS. El
+`Dockerfile` principal continúa siendo la imagen optimizada para AWS Lambda y no debe reemplazarse
+por el archivo de desarrollo durante el despliegue.
+
 ## Ejecución local con Docker y AWS Lambda
 
 La imagen utiliza el runtime oficial de AWS Lambda para Node.js 24 y se construye para la

@@ -1,4 +1,3 @@
-# Configuración CI/CD para el backend NestJS desplegado como imagen de AWS Lambda
 version: 2.1
 
 orbs:
@@ -6,7 +5,8 @@ orbs:
   aws-cli: circleci/aws-cli@5.1.2
 
 jobs:
-  test:
+  # CI: calidad, pruebas, auditoría de dependencias y compilación.
+  validate:
     executor: node/default
     environment:
       JEST_JUNIT_OUTPUT_DIR: ./test-results/
@@ -20,53 +20,92 @@ jobs:
       - run:
           name: Run unit tests
           command: pnpm exec jest --ci --runInBand --reporters=default --reporters=jest-junit
-      - store_test_results:
-          path: ./test-results/
-
-  build:
-    executor: node/default
-    steps:
-      - checkout
-      - node/install-packages:
-          pkg-manager: pnpm
+      - run:
+          name: Audit production dependencies
+          command: pnpm audit --prod --audit-level high
       - run:
           name: Build Lambda application
           command: pnpm run build:lambda
+      - store_test_results:
+          path: ./test-results/
 
-  deploy:
+  # CI: construye la imagen una sola vez para que CD no compile un artefacto
+  # diferente al que fue validado. El tar comprimido viaja por el workspace.
+  build-image:
+    executor: node/default
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Build production Lambda image
+          command: |
+            set -euo pipefail
+
+            IMAGE_NAME="monos-phoenix-back"
+            IMAGE_TAG="${CIRCLE_SHA1}"
+            LOCAL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+
+            docker build \
+              --platform linux/amd64 \
+              --provenance=false \
+              --tag "${LOCAL_IMAGE}" \
+              .
+
+            docker save "${LOCAL_IMAGE}" |
+              gzip > /tmp/monos-phoenix-back-image.tar.gz
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - monos-phoenix-back-image.tar.gz
+
+  # CD: publica en ECR solamente desde develop y espera el escaneo de la
+  # imagen antes de permitir el despliegue.
+  publish-image:
     executor: node/default
     environment:
       AWS_DEFAULT_REGION: us-east-1
       ECR_REPOSITORY: monos-phoenix-back
-      LAMBDA_FUNCTION_NAME: monos-phoenix-back-container-dev
     steps:
-      - checkout
+      - attach_workspace:
+          at: /tmp
       - setup_remote_docker
       - aws-cli/setup
+      - run:
+          name: Load image built by CI
+          command: |
+            set -euo pipefail
 
+            test -s /tmp/monos-phoenix-back-image.tar.gz
+            docker load --input /tmp/monos-phoenix-back-image.tar.gz
       - run:
           name: Resolve immutable image reference
           command: |
+            set -euo pipefail
+
             AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
             ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
             IMAGE_TAG="${CIRCLE_SHA1}"
+            LOCAL_IMAGE="monos-phoenix-back:${IMAGE_TAG}"
             IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
             {
               echo "export ECR_REGISTRY=${ECR_REGISTRY}"
               echo "export IMAGE_TAG=${IMAGE_TAG}"
+              echo "export LOCAL_IMAGE=${LOCAL_IMAGE}"
               echo "export IMAGE_URI=${IMAGE_URI}"
             } >> "${BASH_ENV}"
-
       - run:
           name: Authenticate Docker to Amazon ECR
           command: |
+            set -euo pipefail
+
             aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" |
               docker login --username AWS --password-stdin "${ECR_REGISTRY}"
-
       - run:
-          name: Build and push immutable Lambda image
+          name: Push immutable image
           command: |
+            set -euo pipefail
+
             if ECR_IMAGE_RESULT="$(aws ecr describe-images \
               --repository-name "${ECR_REPOSITORY}" \
               --image-ids "imageTag=${IMAGE_TAG}" \
@@ -74,36 +113,113 @@ jobs:
               --output text 2>&1)"; then
               echo "Image ${IMAGE_URI} already exists; reusing the immutable artifact."
             elif [[ "${ECR_IMAGE_RESULT}" == *"ImageNotFoundException"* ]]; then
-              docker build \
-                --platform linux/amd64 \
-                --provenance=false \
-                --tag "${IMAGE_URI}" \
-                .
+              docker tag "${LOCAL_IMAGE}" "${IMAGE_URI}"
               docker push "${IMAGE_URI}"
             else
               echo "${ECR_IMAGE_RESULT}"
               exit 1
             fi
-
       - run:
-          name: Resolve image digest
+          name: Wait for ECR vulnerability scan
           command: |
+            set -euo pipefail
+
+            scan_status=""
+            for attempt in $(seq 1 30); do
+              scan_status="$(aws ecr describe-image-scan-findings \
+                --repository-name "${ECR_REPOSITORY}" \
+                --image-id "imageTag=${IMAGE_TAG}" \
+                --query 'imageScanStatus.status' \
+                --output text 2>/dev/null || true)"
+
+              case "${scan_status}" in
+                COMPLETE)
+                  break
+                  ;;
+                FAILED|UNSUPPORTED_IMAGE)
+                  echo "ECR image scan finished with status: ${scan_status}"
+                  exit 1
+                  ;;
+                *)
+                  echo "ECR image scan status: ${scan_status:-UNKNOWN}; waiting..."
+                  sleep 10
+                  ;;
+              esac
+            done
+
+            if [[ "${scan_status}" != "COMPLETE" ]]; then
+              echo "ECR image scan did not complete within the expected time."
+              echo "Enable scan-on-push for the ECR repository."
+              exit 1
+            fi
+
+            critical="$(aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id "imageTag=${IMAGE_TAG}" \
+              --query 'imageScanFindings.findingSeverityCounts.CRITICAL' \
+              --output text)"
+            high="$(aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id "imageTag=${IMAGE_TAG}" \
+              --query 'imageScanFindings.findingSeverityCounts.HIGH' \
+              --output text)"
+
+            [[ -z "${critical}" || "${critical}" == "None" ]] && critical=0
+            [[ -z "${high}" || "${high}" == "None" ]] && high=0
+
+            echo "ECR findings: HIGH=${high}, CRITICAL=${critical}"
+
+            if (( critical > 0 || high > 0 )); then
+              echo "The image contains HIGH or CRITICAL vulnerabilities."
+              exit 1
+            fi
+      - run:
+          name: Persist deployed image digest
+          command: |
+            set -euo pipefail
+
             IMAGE_DIGEST="$(aws ecr describe-images \
               --repository-name "${ECR_REPOSITORY}" \
               --image-ids "imageTag=${IMAGE_TAG}" \
               --query 'imageDetails[0].imageDigest' \
               --output text)"
 
-            if [ -z "${IMAGE_DIGEST}" ] || [ "${IMAGE_DIGEST}" = "None" ]; then
+            if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "None" ]]; then
               echo "The pushed image digest could not be resolved."
               exit 1
             fi
 
-            echo "export DEPLOY_IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}@${IMAGE_DIGEST}" >> "${BASH_ENV}"
+            echo "export DEPLOY_IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}@${IMAGE_DIGEST}" \
+              > /tmp/deploy-image.env
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - deploy-image.env
 
+  # CD: despliega exactamente el digest producido y escaneado por el job
+  # publish-image.
+  deploy-lambda:
+    executor: node/default
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+      LAMBDA_FUNCTION_NAME: monos-phoenix-back-container-dev
+    steps:
+      - attach_workspace:
+          at: /tmp
+      - aws-cli/setup
+      - run:
+          name: Load immutable image reference
+          command: |
+            set -euo pipefail
+
+            test -s /tmp/deploy-image.env
+            source /tmp/deploy-image.env
+            echo "export DEPLOY_IMAGE_URI=${DEPLOY_IMAGE_URI}" >> "${BASH_ENV}"
       - run:
           name: Deploy image to AWS Lambda
           command: |
+            set -euo pipefail
+
             aws lambda update-function-code \
               --function-name "${LAMBDA_FUNCTION_NAME}" \
               --image-uri "${DEPLOY_IMAGE_URI}" \
@@ -111,16 +227,17 @@ jobs:
 
             aws lambda wait function-updated \
               --function-name "${LAMBDA_FUNCTION_NAME}"
-
       - run:
           name: Verify Lambda deployment
           command: |
+            set -euo pipefail
+
             LAST_UPDATE_STATUS="$(aws lambda get-function-configuration \
               --function-name "${LAMBDA_FUNCTION_NAME}" \
               --query 'LastUpdateStatus' \
               --output text)"
 
-            if [ "${LAST_UPDATE_STATUS}" != "Successful" ]; then
+            if [[ "${LAST_UPDATE_STATUS}" != "Successful" ]]; then
               echo "Lambda deployment finished with status: ${LAST_UPDATE_STATUS}"
               exit 1
             fi
@@ -130,13 +247,26 @@ jobs:
 workflows:
   ci-cd-container:
     jobs:
-      - test
-      - build:
+      # CI runs on every branch and does not require AWS credentials.
+      - validate
+      - build-image:
           requires:
-            - test
-      - deploy:
+            - validate
+
+      # CD is restricted to the trusted develop branch.
+      - publish-image:
+          # The context must contain protected, least-privilege AWS credentials.
+          context: aws-deploy
           requires:
-            - build
+            - build-image
+          filters:
+            branches:
+              only:
+                - develop
+      - deploy-lambda:
+          context: aws-deploy
+          requires:
+            - publish-image
           filters:
             branches:
               only:

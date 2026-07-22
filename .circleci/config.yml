@@ -154,12 +154,28 @@ jobs:
               exit 1
             fi
 
-            echo "ECR HIGH/CRITICAL findings:"
+            echo "ECR HIGH/CRITICAL finding details:"
             aws ecr describe-image-scan-findings \
               --repository-name "${ECR_REPOSITORY}" \
               --image-id "imageTag=${IMAGE_TAG}" \
-              --query 'imageScanFindings.findings[?severity==`HIGH` || severity==`CRITICAL`].[severity,packageVulnerabilityDetails.vulnerabilityId,packageVulnerabilityDetails.vulnerablePackages[0].name,packageVulnerabilityDetails.vulnerablePackages[0].version,uri]' \
-              --output table
+              --query 'imageScanFindings.findings[?severity==`HIGH` || severity==`CRITICAL`].{severity:severity,cve:name,attributes:attributes,uri:uri}' \
+              --output json
+
+            findings="$(aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id "imageTag=${IMAGE_TAG}" \
+              --query 'imageScanFindings.findings[?severity==`HIGH` || severity==`CRITICAL`].[severity,name,uri]' \
+              --output text)"
+
+            # Temporary, explicit risk acceptance for vulnerabilities inherited
+            # from the AWS Lambda Node.js 24 base image (Amazon Linux 2023).
+            # AWS currently reports no vendor fix for either vulnerability.
+            RISK_ACCEPTANCE_EXPIRES_ON="2026-08-31"
+            risk_acceptance_active=true
+
+            if [[ "$(date -u +%Y-%m-%d)" > "${RISK_ACCEPTANCE_EXPIRES_ON}" ]]; then
+              risk_acceptance_active=false
+            fi
 
             critical="$(aws ecr describe-image-scan-findings \
               --repository-name "${ECR_REPOSITORY}" \
@@ -175,11 +191,56 @@ jobs:
             [[ -z "${critical}" || "${critical}" == "None" ]] && critical=0
             [[ -z "${high}" || "${high}" == "None" ]] && high=0
 
-            echo "ECR findings: HIGH=${high}, CRITICAL=${critical}"
+            accepted_findings=0
+            blocking_findings=0
 
-            if (( critical > 0 || high > 0 )); then
-              echo "The image contains HIGH or CRITICAL vulnerabilities."
+            if [[ -n "${findings}" && "${findings}" != "None" ]]; then
+              while IFS=$'\t' read -r severity cve uri; do
+                if [[ -z "${cve}" || "${cve}" == "None" ]]; then
+                  echo "BLOCKING: ECR returned a HIGH/CRITICAL finding without a CVE identifier."
+                  blocking_findings=$((blocking_findings + 1))
+                  continue
+                fi
+
+                case "${cve}" in
+                  CVE-2026-58016|CVE-2026-54369)
+                    if [[ "${risk_acceptance_active}" == "true" ]]; then
+                      echo "ACCEPTED TEMPORARILY: ${severity} ${cve} (${uri})"
+                      accepted_findings=$((accepted_findings + 1))
+                    else
+                      echo "BLOCKING: the risk acceptance for ${cve} expired on ${RISK_ACCEPTANCE_EXPIRES_ON}."
+                      blocking_findings=$((blocking_findings + 1))
+                    fi
+                    ;;
+                  *)
+                    echo "BLOCKING: ${severity} ${cve} (${uri})"
+                    blocking_findings=$((blocking_findings + 1))
+                    ;;
+                esac
+              done <<< "${findings}"
+            fi
+
+            expected_findings=$((critical + high))
+            processed_findings=$((accepted_findings + blocking_findings))
+
+            if (( processed_findings != expected_findings )); then
+              echo "ECR finding count mismatch: expected=${expected_findings}, processed=${processed_findings}."
+              echo "The deployment is blocked because the scan result could not be evaluated completely."
               exit 1
+            fi
+
+            echo "ECR decision: HIGH=${high}, CRITICAL=${critical}, accepted=${accepted_findings}, blocking=${blocking_findings}"
+
+            if (( blocking_findings > 0 )); then
+              echo "The image contains HIGH or CRITICAL vulnerabilities without an approved exception."
+              exit 1
+            fi
+
+            if (( accepted_findings > 0 )); then
+              echo "Deployment is allowed by a temporary, documented risk acceptance."
+              echo "Risk acceptance valid through ${RISK_ACCEPTANCE_EXPIRES_ON}."
+            else
+              echo "No HIGH or CRITICAL vulnerabilities were found."
             fi
       - run:
           name: Persist deployed image digest

@@ -5,6 +5,63 @@ orbs:
   aws-cli: circleci/aws-cli@5.1.2
 
 jobs:
+  # Seguridad temprana: bloquea secretos y errores de los Dockerfiles antes
+  # de instalar dependencias o construir la imagen.
+  security-source:
+    machine:
+      image: ubuntu-2204:2024.01.1
+    steps:
+      - checkout
+      - run:
+          name: Fetch complete Git history
+          command: |
+            set -euo pipefail
+
+            if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+              git fetch --unshallow --tags
+            else
+              git fetch --tags --prune
+            fi
+      - run:
+          name: Scan Git history and working tree for secrets
+          command: |
+            set -euo pipefail
+
+            mkdir -p security-reports
+
+            docker run --rm \
+              --mount "type=bind,source=${PWD},target=/repo,readonly" \
+              --mount "type=bind,source=${PWD}/security-reports,target=/reports" \
+              ghcr.io/gitleaks/gitleaks:v8.30.1 \
+              git --redact=100 --verbose --exit-code 1 \
+              --report-format json \
+              --report-path /reports/gitleaks-git.json \
+              /repo
+
+            docker run --rm \
+              --mount "type=bind,source=${PWD},target=/repo,readonly" \
+              --mount "type=bind,source=${PWD}/security-reports,target=/reports" \
+              ghcr.io/gitleaks/gitleaks:v8.30.1 \
+              dir --redact=100 --verbose --exit-code 1 \
+              --report-format json \
+              --report-path /reports/gitleaks-dir.json \
+              /repo
+      - run:
+          name: Lint production and development Dockerfiles
+          command: |
+            set -euo pipefail
+
+            docker run --rm \
+              --mount "type=bind,source=${PWD},target=/repo,readonly" \
+              hadolint/hadolint:v2.14.0 \
+              hadolint --format json \
+              /repo/Dockerfile \
+              /repo/Dockerfile.dev \
+              > security-reports/hadolint.json
+      - store_artifacts:
+          path: security-reports
+          destination: source-security
+
   # CI: calidad, pruebas, auditoría de dependencias y compilación.
   validate:
     executor: node/default
@@ -58,6 +115,50 @@ jobs:
           root: /tmp
           paths:
             - monos-phoenix-back-image.tar.gz
+
+  # Seguridad del artefacto: analiza exactamente la imagen creada por CI y
+  # conserva Trivy y CycloneDX como artefactos descargables de CircleCI.
+  image-security:
+    executor: node/default
+    steps:
+      - attach_workspace:
+          at: /tmp
+      - setup_remote_docker
+      - run:
+          name: Load image built by CI
+          command: |
+            set -euo pipefail
+
+            test -s /tmp/monos-phoenix-back-image.tar.gz
+            docker load --input /tmp/monos-phoenix-back-image.tar.gz
+      - run:
+          name: Generate Trivy report and CycloneDX SBOM
+          command: |
+            set -euo pipefail
+
+            mkdir -p security-reports
+            LOCAL_IMAGE="monos-phoenix-back:${CIRCLE_SHA1}"
+
+            # Baseline mode: known findings are reported but do not block yet.
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              aquasec/trivy:0.72.0 \
+              image --scanners vuln \
+              --format json \
+              --exit-code 0 \
+              "${LOCAL_IMAGE}" \
+              > security-reports/trivy.json
+
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              --env SYFT_FORMAT_PRETTY=true \
+              anchore/syft:v1.49.0 \
+              "docker:${LOCAL_IMAGE}" \
+              --output cyclonedx-json \
+              > security-reports/sbom.cyclonedx.json
+      - store_artifacts:
+          path: security-reports
+          destination: image-security
 
   # CD: publica en ECR solamente desde develop y espera el escaneo de la
   # imagen antes de permitir el despliegue.
@@ -317,17 +418,22 @@ workflows:
   ci-cd-container:
     jobs:
       # CI runs on every branch and does not require AWS credentials.
+      - security-source
       - validate
       - build-image:
           requires:
+            - security-source
             - validate
+      - image-security:
+          requires:
+            - build-image
 
       # CD is restricted to the trusted develop branch.
       - publish-image:
           # The context must contain protected, least-privilege AWS credentials.
           context: aws-deploy
           requires:
-            - build-image
+            - image-security
           filters:
             branches:
               only:

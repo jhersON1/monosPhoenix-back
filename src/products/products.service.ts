@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from './product.entity';
@@ -24,7 +24,10 @@ export class ProductsService {
     return this.productRepository.save(product);
   }
 
+  private readonly logger = new Logger(ProductsService.name);
+
   findAll(): Promise<Product[]> {
+    this.logger.log('Fetching all products...');
     return this.productRepository.find({ order: { createdAt: 'DESC' } });
   }
 

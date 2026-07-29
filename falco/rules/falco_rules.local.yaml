@@ -1,0 +1,88 @@
+# =============================================================================
+# Falco Custom Rules - monosPhoenix Local Environment
+# Falco 0.44 compatible - outputs use only safe syscall + container fields
+# container.name available via container plugin (loaded in falco.yaml)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Macros base (necesarias al no usar las reglas por defecto)
+# ---------------------------------------------------------------------------
+- macro: container
+  condition: (container.id != host)
+
+- macro: spawned_process
+  condition: (evt.type in (execve, execveat))
+
+- macro: open_write
+  condition: (evt.type in (open, openat, openat2) and evt.is_open_write = true)
+
+- macro: open_read
+  condition: (evt.type in (open, openat, openat2) and evt.is_open_read = true)
+
+# ---------------------------------------------------------------------------
+# Macros de contexto
+# ---------------------------------------------------------------------------
+- macro: monos_api_container
+  condition: container.name contains "monos-phoenix-local-api"
+
+- macro: monos_db_container
+  condition: container.name contains "monos-phoenix-local-database"
+
+- macro: monos_monitoring_containers
+  condition: >
+    container.name contains "monos-phoenix-local-falco" or
+    container.name contains "monos-phoenix-local-loki" or
+    container.name contains "monos-phoenix-local-grafana"
+
+- macro: allowed_node_procs
+  condition: proc.name in (node, pnpm, npm, sh, bash, tini, nest, ts-node, esbuild)
+
+# ---------------------------------------------------------------------------
+# REGLA 1: Proceso inesperado en contenedor API
+# ---------------------------------------------------------------------------
+- rule: Unexpected Process in API Container
+  desc: Proceso no esperado en el contenedor API de monosPhoenix
+  condition: spawned_process and monos_api_container and not allowed_node_procs and not proc.pname in (node, pnpm, npm, sh, bash, tini)
+  output: "Proceso inesperado en API container=%container.name user=%user.name proc=%proc.name pid=%proc.pid cmdline=%proc.cmdline"
+  priority: WARNING
+  tags: [container, process, monos-phoenix, api]
+
+# ---------------------------------------------------------------------------
+# REGLA 2: Shell interactiva en contenedor (posible intrusión)
+# ---------------------------------------------------------------------------
+- rule: Shell Opened in Container
+  desc: Shell interactiva detectada en contenedor del stack
+  condition: spawned_process and container and proc.name in (bash, sh, zsh, dash, ash) and proc.tty != 0 and not monos_monitoring_containers
+  output: "Shell interactiva en contenedor container=%container.name user=%user.name shell=%proc.name pid=%proc.pid"
+  priority: ERROR
+  tags: [container, shell, intrusion, monos-phoenix]
+
+# ---------------------------------------------------------------------------
+# REGLA 3: Escritura en directorio sensible del API
+# ---------------------------------------------------------------------------
+- rule: Write to Sensitive Dir in API
+  desc: Escritura en directorio sensible dentro del contenedor API
+  condition: open_write and monos_api_container and (fd.name startswith /etc or fd.name startswith /usr/bin or fd.name startswith /bin or fd.name startswith /sbin)
+  output: "Escritura sensible en API container=%container.name user=%user.name file=%fd.name proc=%proc.name"
+  priority: CRITICAL
+  tags: [container, filesystem, monos-phoenix, api]
+
+# ---------------------------------------------------------------------------
+# REGLA 4: Lectura de /proc/pid/environ (robo de credenciales)
+# ---------------------------------------------------------------------------
+- rule: Read Environ from Proc
+  desc: Proceso leyendo variables de entorno de otro proceso
+  condition: open_read and container and fd.name glob "/proc/*/environ" and not proc.name in (ps, top, htop, cat, sh, bash)
+  output: "Lectura de environ container=%container.name user=%user.name proc=%proc.name file=%fd.name"
+  priority: WARNING
+  tags: [container, credentials, process, monos-phoenix]
+
+# ---------------------------------------------------------------------------
+# REGLA 5: Elevación de privilegios
+# ---------------------------------------------------------------------------
+- rule: Privilege Escalation in Container
+  desc: Proceso intentando elevar privilegios a root
+  condition: evt.type in (setuid, setgid) and container and not monos_monitoring_containers and evt.rawres = 0 and user.uid != 0 and evt.arg.uid = 0
+  output: "Elevacion de privilegios container=%container.name user=%user.name proc=%proc.name pid=%proc.pid"
+  priority: CRITICAL
+  tags: [container, privilege, escalation, monos-phoenix]

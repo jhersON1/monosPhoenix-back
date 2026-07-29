@@ -1,0 +1,104 @@
+# =============================================================================
+# Falco Configuration - monosPhoenix Local Environment
+# Version: compatible with Falco 0.44 (latest)
+# Output: HTTP → Falcosidekick → Loki → Grafana (NO console output)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Engine: modern_ebpf (CO-RE eBPF probe)
+# Works on Docker Desktop / WSL2 without kernel module compilation
+# Requires kernel 5.8+ (WSL2 default is 5.15+)
+# ---------------------------------------------------------------------------
+engine:
+  kind: modern_ebpf
+  modern_ebpf:
+    cpus_for_each_buffer: 2
+    buf_size_preset: 4
+    drop_failed_exit: false
+
+# ---------------------------------------------------------------------------
+# Rules: ONLY load our custom rules
+# Default rules require the container plugin (v0.40+), we skip them
+# ---------------------------------------------------------------------------
+rules_files:
+  - /etc/falco/rules.d
+
+# ---------------------------------------------------------------------------
+# Plugins: load container plugin for Docker metadata (container.name, etc.)
+# Included by default in falcosecurity/falco:latest image
+# ---------------------------------------------------------------------------
+load_plugins: [container]
+
+plugins:
+  - name: container
+    library_path: libcontainer.so
+    init_config:
+      label_max_len: 100
+      engines:
+        docker:
+          enabled: true
+          sockets:
+            - /var/run/docker.sock
+        bpm:
+          enabled: false
+        lxc:
+          enabled: false
+        libvirt_lxc:
+          enabled: false
+        containerd:
+          enabled: false
+        cri:
+          enabled: false
+        podman:
+          enabled: false
+
+# ---------------------------------------------------------------------------
+# Output format
+# ---------------------------------------------------------------------------
+json_output: true
+json_include_output_property: true
+json_include_tags_property: true
+
+# ---------------------------------------------------------------------------
+# Disable ALL local outputs (zero console noise)
+# ---------------------------------------------------------------------------
+stdout_output:
+  enabled: false
+
+syslog_output:
+  enabled: false
+
+file_output:
+  enabled: false
+  filename: /dev/null
+
+# ---------------------------------------------------------------------------
+# HTTP output → Falcosidekick (the only active output)
+# ---------------------------------------------------------------------------
+http_output:
+  enabled: true
+  url: "http://falcosidekick:2801"
+  user_agent: "falcosecurity/falco"
+
+# ---------------------------------------------------------------------------
+# Logging - minimal
+# ---------------------------------------------------------------------------
+log_stderr: true
+log_syslog: false
+log_level: warning
+
+# ---------------------------------------------------------------------------
+# Priority threshold - capture Notice and above
+# ---------------------------------------------------------------------------
+priority: notice
+
+# ---------------------------------------------------------------------------
+# Performance
+# ---------------------------------------------------------------------------
+buffered_outputs: false
+
+# ---------------------------------------------------------------------------
+# Hot reload on config change
+# ---------------------------------------------------------------------------
+watch_config_files: true
+

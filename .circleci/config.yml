@@ -374,7 +374,7 @@ jobs:
                 \"docker run -d --name monos-phoenix-back --restart unless-stopped -p 80:3000 -e DB_HOST=${DB_HOST} -e DB_PORT=${DB_PORT} -e DB_NAME=${DB_NAME} -e DB_USER=${DB_USER} -e DB_PASSWORD=${DB_PASSWORD} -e DB_SSL=${DB_SSL} -e NODE_ENV=production ${IMAGE_URI}\",
                 \"docker stop cloudflared || true\",
                 \"docker rm cloudflared || true\",
-                \"docker run -d --name cloudflared --network host --restart unless-stopped cloudflare/cloudflared:latest tunnel --url http://localhost:3000\"
+                \"docker run -d --name cloudflared --network host --restart unless-stopped cloudflare/cloudflared:latest tunnel --url http://localhost:80\"
               ]" \
               --query 'Command.CommandId' \
               --output text)"

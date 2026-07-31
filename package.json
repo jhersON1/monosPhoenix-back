@@ -6,6 +6,11 @@
   "private": true,
   "license": "UNLICENSED",
   "packageManager": "pnpm@11.15.1",
+  "pnpm": {
+    "overrides": {
+      "js-yaml": "^5.2.2"
+    }
+  },
   "scripts": {
     "build": "pnpm run build:lambda",
     "build:http": "nest build --config nest-cli.json",

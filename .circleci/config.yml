@@ -24,20 +24,20 @@ jobs:
           name: Audit production dependencies
           command: pnpm audit --prod --audit-level high
       - run:
-          name: Build Lambda application
-          command: pnpm run build:lambda
+          name: Build HTTP application
+          command: pnpm run build:http
       - store_test_results:
           path: ./test-results/
 
-  # CI: construye la imagen una sola vez para que CD no compile un artefacto
-  # diferente al que fue validado. El tar comprimido viaja por el workspace.
+  # CI: construye la imagen Docker HTTP una sola vez para que CD no compile
+  # un artefacto diferente al que fue validado.
   build-image:
     executor: node/default
     steps:
       - checkout
       - setup_remote_docker
       - run:
-          name: Build production Lambda image
+          name: Build production HTTP image
           command: |
             set -euo pipefail
 
@@ -168,8 +168,7 @@ jobs:
               --output text)"
 
             # Temporary, explicit risk acceptance for vulnerabilities inherited
-            # from the AWS Lambda Node.js 24 base image (Amazon Linux 2023).
-            # AWS currently reports no vendor fix for either vulnerability.
+            # from the Node.js 24 base image.
             RISK_ACCEPTANCE_EXPIRES_ON="2026-08-31"
             risk_acceptance_active=true
 
@@ -243,75 +242,180 @@ jobs:
               echo "No HIGH or CRITICAL vulnerabilities were found."
             fi
       - run:
-          name: Persist deployed image digest
+          name: Persist deployed image reference
           command: |
             set -euo pipefail
 
-            IMAGE_DIGEST="$(aws ecr describe-images \
-              --repository-name "${ECR_REPOSITORY}" \
-              --image-ids "imageTag=${IMAGE_TAG}" \
-              --query 'imageDetails[0].imageDigest' \
-              --output text)"
-
-            if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "None" ]]; then
-              echo "The pushed image digest could not be resolved."
-              exit 1
-            fi
-
-            echo "export DEPLOY_IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}@${IMAGE_DIGEST}" \
-              > /tmp/deploy-image.env
+            {
+              echo "export IMAGE_URI=${IMAGE_URI}"
+              echo "export ECR_REGISTRY=${ECR_REGISTRY}"
+            } > /tmp/deploy-image.env
       - persist_to_workspace:
           root: /tmp
           paths:
             - deploy-image.env
 
-  # CD: despliega exactamente el digest producido y escaneado por el job
-  # publish-image.
-  deploy-lambda:
+  # CD: aprovisiona la infraestructura en AWS con Terraform (VPC, SG, EC2).
+  tf-provision:
     executor: node/default
     environment:
       AWS_DEFAULT_REGION: us-east-1
-      LAMBDA_FUNCTION_NAME: monos-phoenix-back-container-dev
+    steps:
+      - checkout
+      - aws-cli/setup
+      - run:
+          name: Install Terraform CLI
+          command: |
+            set -euo pipefail
+            TF_VERSION="1.10.5"
+            curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
+            sudo unzip -o /tmp/terraform.zip -d /usr/local/bin/
+            rm /tmp/terraform.zip
+            terraform --version
+      - run:
+          name: Terraform Init
+          command: |
+            cd terraform
+            terraform init
+      - run:
+          name: Terraform Plan
+          command: |
+            cd terraform
+            terraform plan -out=tfplan
+      - run:
+          name: Terraform Apply
+          command: |
+            cd terraform
+            terraform apply -auto-approve tfplan
+      - run:
+          name: Export Terraform outputs
+          command: |
+            set -euo pipefail
+            cd terraform
+
+            INSTANCE_ID="$(terraform output -raw ec2_instance_id)"
+            EC2_PUBLIC_IP="$(terraform output -raw ec2_public_ip)"
+            ECR_REGISTRY="$(terraform output -raw ecr_registry)"
+
+            {
+              echo "export INSTANCE_ID=${INSTANCE_ID}"
+              echo "export EC2_PUBLIC_IP=${EC2_PUBLIC_IP}"
+              echo "export ECR_REGISTRY=${ECR_REGISTRY}"
+            } > /tmp/tf-outputs.env
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - tf-outputs.env
+
+  # CD: despliega el contenedor Docker en la VM via AWS SSM (sin SSH).
+  deploy-vm:
+    executor: node/default
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+      ECR_REPOSITORY: monos-phoenix-back
     steps:
       - attach_workspace:
           at: /tmp
       - aws-cli/setup
       - run:
-          name: Load immutable image reference
+          name: Load deployment references
           command: |
             set -euo pipefail
 
             test -s /tmp/deploy-image.env
             source /tmp/deploy-image.env
-            echo "export DEPLOY_IMAGE_URI=${DEPLOY_IMAGE_URI}" >> "${BASH_ENV}"
+            echo "export IMAGE_URI=${IMAGE_URI}" >> "${BASH_ENV}"
+            echo "export ECR_REGISTRY=${ECR_REGISTRY}" >> "${BASH_ENV}"
+
+            test -s /tmp/tf-outputs.env
+            source /tmp/tf-outputs.env
+            echo "export INSTANCE_ID=${INSTANCE_ID}" >> "${BASH_ENV}"
+            echo "export EC2_PUBLIC_IP=${EC2_PUBLIC_IP}" >> "${BASH_ENV}"
       - run:
-          name: Deploy image to AWS Lambda
+          name: Wait for EC2 instance to be ready
           command: |
             set -euo pipefail
 
-            aws lambda update-function-code \
-              --function-name "${LAMBDA_FUNCTION_NAME}" \
-              --image-uri "${DEPLOY_IMAGE_URI}" \
-              >/dev/null
+            echo "Waiting for SSM agent on instance ${INSTANCE_ID}..."
+            for attempt in $(seq 1 30); do
+              status="$(aws ssm describe-instance-information \
+                --filters "Key=InstanceIds,Values=${INSTANCE_ID}" \
+                --query 'InstanceInformationList[0].PingStatus' \
+                --output text 2>/dev/null || echo "NotFound")"
 
-            aws lambda wait function-updated \
-              --function-name "${LAMBDA_FUNCTION_NAME}"
-      - run:
-          name: Verify Lambda deployment
-          command: |
-            set -euo pipefail
+              if [[ "${status}" == "Online" ]]; then
+                echo "SSM Agent is online on ${INSTANCE_ID}."
+                break
+              fi
+              echo "SSM status: ${status}; waiting... (attempt ${attempt}/30)"
+              sleep 10
+            done
 
-            LAST_UPDATE_STATUS="$(aws lambda get-function-configuration \
-              --function-name "${LAMBDA_FUNCTION_NAME}" \
-              --query 'LastUpdateStatus' \
-              --output text)"
-
-            if [[ "${LAST_UPDATE_STATUS}" != "Successful" ]]; then
-              echo "Lambda deployment finished with status: ${LAST_UPDATE_STATUS}"
+            if [[ "${status}" != "Online" ]]; then
+              echo "SSM Agent did not come online within the expected time."
               exit 1
             fi
+      - run:
+          name: Deploy container via SSM
+          command: |
+            set -euo pipefail
 
-            echo "Lambda ${LAMBDA_FUNCTION_NAME} deployed successfully from ${DEPLOY_IMAGE_URI}."
+            COMMAND_ID="$(aws ssm send-command \
+              --instance-ids "${INSTANCE_ID}" \
+              --document-name "AWS-RunShellScript" \
+              --comment "Deploy monos-phoenix-back ${CIRCLE_SHA1}" \
+              --parameters "commands=[
+                \"aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}\",
+                \"docker pull ${IMAGE_URI}\",
+                \"docker stop monos-phoenix-back || true\",
+                \"docker rm monos-phoenix-back || true\",
+                \"docker run -d --name monos-phoenix-back --restart unless-stopped -p 80:3000 -e DB_HOST=${DB_HOST} -e DB_PORT=${DB_PORT} -e DB_NAME=${DB_NAME} -e DB_USER=${DB_USER} -e DB_PASSWORD=${DB_PASSWORD} -e DB_SSL=${DB_SSL} -e NODE_ENV=production ${IMAGE_URI}\"
+              ]" \
+              --query 'Command.CommandId' \
+              --output text)"
+
+            echo "SSM Command sent: ${COMMAND_ID}"
+            echo "Waiting for command to complete..."
+
+            aws ssm wait command-executed \
+              --command-id "${COMMAND_ID}" \
+              --instance-id "${INSTANCE_ID}" || true
+
+            STATUS="$(aws ssm get-command-invocation \
+              --command-id "${COMMAND_ID}" \
+              --instance-id "${INSTANCE_ID}" \
+              --query 'Status' \
+              --output text)"
+
+            echo "Command status: ${STATUS}"
+
+            if [[ "${STATUS}" != "Success" ]]; then
+              echo "SSM command output:"
+              aws ssm get-command-invocation \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${INSTANCE_ID}" \
+                --query '[StandardOutputContent, StandardErrorContent]' \
+                --output text
+              exit 1
+            fi
+      - run:
+          name: Verify deployment
+          command: |
+            set -euo pipefail
+
+            echo "Waiting for application to start on ${EC2_PUBLIC_IP}..."
+            sleep 15
+
+            HTTP_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+              --max-time 10 \
+              "http://${EC2_PUBLIC_IP}/" || echo "000")"
+
+            if [[ "${HTTP_STATUS}" =~ ^(200|301|302)$ ]]; then
+              echo "Application is running at http://${EC2_PUBLIC_IP}/ (HTTP ${HTTP_STATUS})"
+            else
+              echo " Application returned HTTP ${HTTP_STATUS}. Check container logs on the VM."
+              echo "The container may still be starting up."
+            fi
 
 workflows:
   ci-cd-container:
@@ -332,10 +436,19 @@ workflows:
             branches:
               only:
                 - develop
-      - deploy-lambda:
+      - tf-provision:
           context: aws-deploy
           requires:
             - publish-image
+          filters:
+            branches:
+              only:
+                - develop
+      - deploy-vm:
+          context: aws-deploy
+          requires:
+            - publish-image
+            - tf-provision
           filters:
             branches:
               only:

@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Terraform – Variables de configuración.
+# Terraform – Variables de configuración para EKS.
 # ---------------------------------------------------------------------------
 
 variable "aws_region" {
@@ -21,19 +21,7 @@ variable "project_name" {
 }
 
 variable "instance_type" {
-  description = "Tipo de instancia EC2."
+  description = "Tipo de instancia EC2 para los workers de EKS."
   type        = string
-  default     = "t3.micro"
-}
-
-variable "app_port" {
-  description = "Puerto HTTP en el que escucha la aplicación NestJS."
-  type        = number
-  default     = 3000
-}
-
-variable "ecr_repository_name" {
-  description = "Nombre del repositorio ECR donde se publica la imagen Docker."
-  type        = string
-  default     = "monos-phoenix-back"
+  default     = "t3.medium" # t3.micro es demasiado pequeño para EKS
 }

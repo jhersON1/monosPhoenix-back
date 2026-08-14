@@ -293,13 +293,13 @@ jobs:
             set -euo pipefail
             cd terraform
 
-            INSTANCE_ID="$(terraform output -raw ec2_instance_id)"
-            EC2_PUBLIC_IP="$(terraform output -raw ec2_public_ip)"
+            CLUSTER_NAME="$(terraform output -raw cluster_name)"
+            CLUSTER_ENDPOINT="$(terraform output -raw cluster_endpoint)"
             ECR_REGISTRY="$(terraform output -raw ecr_registry)"
 
             {
-              echo "export INSTANCE_ID=${INSTANCE_ID}"
-              echo "export EC2_PUBLIC_IP=${EC2_PUBLIC_IP}"
+              echo "export CLUSTER_NAME=${CLUSTER_NAME}"
+              echo "export CLUSTER_ENDPOINT=${CLUSTER_ENDPOINT}"
               echo "export ECR_REGISTRY=${ECR_REGISTRY}"
             } > /tmp/tf-outputs.env
       - persist_to_workspace:
@@ -307,13 +307,13 @@ jobs:
           paths:
             - tf-outputs.env
 
-  # CD: despliega el contenedor Docker en la VM via AWS SSM (sin SSH).
-  deploy-vm:
+  # CD: despliega el contenedor Docker en EKS usando kubectl.
+  deploy-eks:
     executor: node/default
     environment:
       AWS_DEFAULT_REGION: us-east-1
-      ECR_REPOSITORY: monos-phoenix-back
     steps:
+      - checkout
       - attach_workspace:
           at: /tmp
       - aws-cli/setup
@@ -329,114 +329,31 @@ jobs:
 
             test -s /tmp/tf-outputs.env
             source /tmp/tf-outputs.env
-            echo "export INSTANCE_ID=${INSTANCE_ID}" >> "${BASH_ENV}"
-            echo "export EC2_PUBLIC_IP=${EC2_PUBLIC_IP}" >> "${BASH_ENV}"
+            echo "export CLUSTER_NAME=${CLUSTER_NAME}" >> "${BASH_ENV}"
+            echo "export CLUSTER_ENDPOINT=${CLUSTER_ENDPOINT}" >> "${BASH_ENV}"
       - run:
-          name: Wait for EC2 instance to be ready
+          name: Install kubectl
+          command: |
+            curl -O https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-05-12/bin/linux/amd64/kubectl
+            chmod +x ./kubectl
+            sudo mv ./kubectl /usr/local/bin/kubectl
+      - run:
+          name: Configure kubectl for EKS
+          command: |
+            aws eks update-kubeconfig --region "${AWS_DEFAULT_REGION}" --name "${CLUSTER_NAME}"
+      - run:
+          name: Deploy to Kubernetes
           command: |
             set -euo pipefail
-
-            echo "Waiting for SSM agent on instance ${INSTANCE_ID}..."
-            for attempt in $(seq 1 30); do
-              status="$(aws ssm describe-instance-information \
-                --filters "Key=InstanceIds,Values=${INSTANCE_ID}" \
-                --query 'InstanceInformationList[0].PingStatus' \
-                --output text 2>/dev/null || echo "NotFound")"
-
-              if [[ "${status}" == "Online" ]]; then
-                echo "SSM Agent is online on ${INSTANCE_ID}."
-                break
-              fi
-              echo "SSM status: ${status}; waiting... (attempt ${attempt}/30)"
-              sleep 10
-            done
-
-            if [[ "${status}" != "Online" ]]; then
-              echo "SSM Agent did not come online within the expected time."
-              exit 1
-            fi
-      - run:
-          name: Deploy container via SSM
-          command: |
-            set -euo pipefail
-
-            COMMAND_ID="$(aws ssm send-command \
-              --instance-ids "${INSTANCE_ID}" \
-              --document-name "AWS-RunShellScript" \
-              --comment "Deploy monos-phoenix-back ${CIRCLE_SHA1}" \
-              --parameters "commands=[
-                \"export PATH=\$PATH:/usr/local/bin:/usr/bin\",
-                \"cloud-init status --wait || true\",
-                \"aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}\",
-                \"docker pull ${IMAGE_URI}\",
-                \"docker stop monos-phoenix-back || true\",
-                \"docker rm monos-phoenix-back || true\",
-                \"docker run -d --name monos-phoenix-back --restart unless-stopped -p 80:3000 -e DB_HOST=${DB_HOST} -e DB_PORT=${DB_PORT} -e DB_NAME=${DB_NAME} -e DB_USER=${DB_USER} -e DB_PASSWORD=${DB_PASSWORD} -e DB_SSL=${DB_SSL} -e NODE_ENV=production ${IMAGE_URI}\",
-                \"docker stop cloudflared || true\",
-                \"docker rm cloudflared || true\",
-                \"docker run -d --name cloudflared --network host --restart unless-stopped cloudflare/cloudflared:latest tunnel --url http://localhost:80\"
-              ]" \
-              --query 'Command.CommandId' \
-              --output text)"
-
-            echo "SSM Command sent: ${COMMAND_ID}"
-            echo "Waiting for command to complete..."
-
-            aws ssm wait command-executed \
-              --command-id "${COMMAND_ID}" \
-              --instance-id "${INSTANCE_ID}" || true
-
-            STATUS="$(aws ssm get-command-invocation \
-              --command-id "${COMMAND_ID}" \
-              --instance-id "${INSTANCE_ID}" \
-              --query 'Status' \
-              --output text)"
-
-            echo "Command status: ${STATUS}"
-
-            if [[ "${STATUS}" != "Success" ]]; then
-              echo "SSM command output:"
-              aws ssm get-command-invocation \
-                --command-id "${COMMAND_ID}" \
-                --instance-id "${INSTANCE_ID}" \
-                --query '[StandardOutputContent, StandardErrorContent]' \
-                --output text
-              exit 1
-            fi
-      - run:
-          name: Verify deployment
-          command: |
-            set -euo pipefail
-
-            echo "Waiting for application to start on ${EC2_PUBLIC_IP}..."
-            sleep 15
-
-            HTTP_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
-              --max-time 10 \
-              "http://${EC2_PUBLIC_IP}/" || echo "000")"
-
-            if [[ "${HTTP_STATUS}" =~ ^(200|301|302)$ ]]; then
-              echo "Application is running at http://${EC2_PUBLIC_IP}/ (HTTP ${HTTP_STATUS})"
-            else
-              echo " Application returned HTTP ${HTTP_STATUS}. Check container logs on the VM."
-              echo "The container may still be starting up."
-            fi
-
-            echo "--------------------------------------------------------"
-            echo "Fetching Cloudflare HTTPS Tunnel URL..."
-            sleep 5
-            aws ssm send-command \
-              --instance-ids "${INSTANCE_ID}" \
-              --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["docker logs cloudflared 2>&1 | grep -o '\''https://.*trycloudflare.com'\'' | head -n 1"]' \
-              --query 'Command.CommandId' \
-              --output text > /tmp/cmd_id.txt
-
-            sleep 5
-            CMD_ID="$(cat /tmp/cmd_id.txt)"
-            CF_URL="$(aws ssm get-command-invocation --command-id "${CMD_ID}" --instance-id "${INSTANCE_ID}" --query 'StandardOutputContent' --output text || echo "")"
-            echo "HTTPS URL (Cloudflare Tunnel): ${CF_URL}"
-            echo "--------------------------------------------------------"
+            
+            # Reemplazar la imagen en el archivo backend-deployment.yaml con el IMAGE_URI generado en CI
+            sed -i "s|image: monos-phoenix-back:latest|image: ${IMAGE_URI}|g" k8s/backend-deployment.yaml
+            
+            # Aplicar manifiestos
+            kubectl apply -f k8s/
+            
+            echo "Verificando el estado del despliegue..."
+            kubectl rollout status deployment/backend-deployment
 
 workflows:
   ci-cd-container:
@@ -465,7 +382,7 @@ workflows:
             branches:
               only:
                 - develop
-      - deploy-vm:
+      - deploy-eks:
           context: aws-deploy
           requires:
             - publish-image

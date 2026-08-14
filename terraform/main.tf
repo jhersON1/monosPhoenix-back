@@ -68,7 +68,7 @@ resource "aws_ecr_repository" "backend" {
 }
 
 resource "aws_ecr_repository" "frontend" {
-  name         = "monos-phoenix-front"
+  name         = "phoenix-view-front"
   force_delete = true
 }
 

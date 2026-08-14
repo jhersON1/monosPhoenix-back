@@ -17,7 +17,7 @@ spec:
       containers:
       - name: frontend
         # Deberá ser reemplazado dinámicamente o actualizado según ECR
-        image: monos-phoenix-front:latest
+        image: phoenix-view-front:latest
         ports:
         - containerPort: 80
 ---

@@ -371,6 +371,11 @@ jobs:
             kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
             echo ""
             echo "==================================="
+            
+            echo "--- DIAGNÓSTICO DEL CLÚSTER ---"
+            kubectl get pods -l app=backend
+            echo "--- LOGS DEL BACKEND ---"
+            kubectl logs -l app=backend --tail=100 || true
 
 workflows:
   ci-cd-container:

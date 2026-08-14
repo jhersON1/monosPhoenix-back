@@ -347,6 +347,17 @@ jobs:
             set -euo pipefail
             
             # Reemplazar la imagen en el archivo backend-deployment.yaml con el IMAGE_URI generado en CI
+            # Inyectar variables de la base de datos al clúster como un Secreto
+            kubectl create secret generic backend-db-secret \
+              --from-literal=DB_HOST="${DB_HOST}" \
+              --from-literal=DB_PORT="${DB_PORT}" \
+              --from-literal=DB_NAME="${DB_NAME}" \
+              --from-literal=DB_USER="${DB_USER}" \
+              --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
+              --from-literal=DB_SSL="${DB_SSL}" \
+              --dry-run=client -o yaml | kubectl apply -f -
+            
+            # Reemplazar la imagen en el archivo backend-deployment.yaml con el IMAGE_URI generado en CI
             sed -i "s|image: monos-phoenix-back:latest|image: ${IMAGE_URI}|g" k8s/backend-deployment.yaml
             
             # Aplicar manifiestos
@@ -354,6 +365,12 @@ jobs:
             
             echo "Verificando el estado del despliegue..."
             kubectl rollout status deployment/backend-deployment
+            
+            echo "==================================="
+            echo "URL pública de tu Backend (API):"
+            kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+            echo ""
+            echo "==================================="
 
 workflows:
   ci-cd-container:

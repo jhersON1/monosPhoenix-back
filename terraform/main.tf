@@ -60,17 +60,9 @@ resource "aws_route_table_association" "public_2" {
 }
 
 # ============================
-# ECR Repositories
+# ECR Repositories (Ya existen en AWS, por lo que los removemos de Terraform)
 # ============================
-resource "aws_ecr_repository" "backend" {
-  name         = "monos-phoenix-back"
-  force_delete = true
-}
 
-resource "aws_ecr_repository" "frontend" {
-  name         = "phoenix-view-front"
-  force_delete = true
-}
 
 # ============================
 # EKS Cluster
@@ -133,9 +125,9 @@ resource "aws_eks_node_group" "main" {
   instance_types  = [var.instance_type]
 
   scaling_config {
-    desired_size = 2
-    max_size     = 3
-    min_size     = 1
+    desired_size = 4
+    max_size     = 5
+    min_size     = 2
   }
 
   depends_on = [

@@ -23,5 +23,5 @@ variable "project_name" {
 variable "instance_type" {
   description = "Tipo de instancia EC2 para los workers de EKS."
   type        = string
-  default     = "t3.medium" # t3.micro es demasiado pequeño para EKS
+  default     = "t3.micro" # Forzado por AWS Free Tier
 }

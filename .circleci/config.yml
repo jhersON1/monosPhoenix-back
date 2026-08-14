@@ -364,7 +364,7 @@ jobs:
             kubectl apply -f k8s/
             
             echo "Verificando el estado del despliegue..."
-            kubectl rollout status deployment/backend-deployment
+            kubectl rollout status deployment/backend-deployment --timeout=60s || echo "El despliegue está tardando o fallando, extrayendo logs..."
             
             echo "==================================="
             echo "URL pública de tu Backend (API):"

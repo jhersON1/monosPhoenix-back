@@ -58,7 +58,7 @@ export const handler: ApiGatewayHandler = async (event, context) => {
   const result = await server(event, context, () => undefined);
 
   if (result === undefined) {
-    console.log('mauri gay');
+    console.log('mauri gay v2');
     throw new Error('Serverless Express returned no response.');
   }
 

@@ -136,3 +136,51 @@ resource "aws_eks_node_group" "main" {
     aws_iam_role_policy_attachment.eks_ecr
   ]
 }
+
+# ============================
+# RDS PostgreSQL Database
+# ============================
+resource "aws_db_subnet_group" "rds" {
+  name       = "${var.project_name}-${var.environment}-rds-subnet-group"
+  subnet_ids = [aws_subnet.public_1.id, aws_subnet.public_2.id]
+  tags = { Name = "${var.project_name}-${var.environment}-rds-subnet-group" }
+}
+
+resource "aws_security_group" "rds" {
+  name        = "${var.project_name}-${var.environment}-rds-sg"
+  description = "Security group for RDS PostgreSQL"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Abierto para facilitar desarrollo/acceso externo
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.project_name}-${var.environment}-rds-sg" }
+}
+
+resource "aws_db_instance" "main" {
+  identifier             = "${var.project_name}-db"
+  allocated_storage      = 20
+  engine                 = "postgres"
+  instance_class         = "db.t3.micro"
+  db_name                = var.db_name
+  username               = var.db_username
+  password               = var.db_password
+  skip_final_snapshot    = true
+  publicly_accessible    = true
+  
+  db_subnet_group_name   = aws_db_subnet_group.rds.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+
+  tags = { Name = "${var.project_name}-db" }
+}

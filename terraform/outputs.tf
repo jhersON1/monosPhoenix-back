@@ -16,3 +16,8 @@ output "ecr_registry" {
   description = "URI del registro ECR (para docker login)."
   value       = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com"
 }
+
+output "rds_endpoint" {
+  description = "Endpoint de la base de datos RDS PostgreSQL"
+  value       = aws_db_instance.main.endpoint
+}

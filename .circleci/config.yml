@@ -354,7 +354,7 @@ jobs:
               --from-literal=DB_NAME="${DB_NAME}" \
               --from-literal=DB_USER="${DB_USER}" \
               --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
-              --from-literal=DB_SSL="${DB_SSL}" \
+              --from-literal=DB_SSL="true" \
               --dry-run=client -o yaml | kubectl apply -f -
             
             # Reemplazar la imagen en el archivo backend-deployment.yaml con el IMAGE_URI generado en CI

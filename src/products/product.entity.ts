@@ -7,12 +7,10 @@ import {
 } from 'typeorm';
 
 const decimalTransformer: ValueTransformer = {
-  /** Stores the numeric value without changing its decimal representation. */
   to(value: number): number {
     return value;
   },
 
-  /** Converts PostgreSQL numeric values, returned as strings, into API numbers. */
   from(value: string): number {
     return Number(value);
   },
